@@ -520,7 +520,7 @@ export const makeSocket = (config: SocketConfig) => {
 			name: '~'
 		}
 		ev.emit('creds.update', authState.creds)
-		await sendNode({
+		await query({
 			tag: 'iq',
 			attrs: {
 				to: S_WHATSAPP_NET,
@@ -598,6 +598,7 @@ export const makeSocket = (config: SocketConfig) => {
 
 	ws.on('CB:notification,type:link_code_companion_reg', async(node: BinaryNode) => {
         await finishCodePairing(node, authState, query, generateMessageTag, ev)
+        await sendNode({ tag: 'ack', attrs: { id: node.attrs.id, to: node.attrs.from, class: 'notification', type: node.attrs.type } })
     })
 
 	ws.on('message', onMessageReceived)

@@ -36,3 +36,12 @@ Recomendação: tecnicamente apto para um teste controlado com conta dedicada se
 - https://github.com/WhiskeySockets/Baileys/blob/master/src/Utils/noise-handler.ts
 - https://github.com/WhiskeySockets/Baileys/blob/master/src/Defaults/index.ts
 - https://github.com/tulir/whatsmeow/blob/main/handshake.go
+
+
+## Teste controlado local posterior
+
+Conta dedicada vinculada por código em 18/11/2026. Validação real da cadeia Noise passou sem relaxar verificações. HTTP /session retornou connected:true e /check retornou HTTP 200 true para o próprio número dedicado. Após encerrar e reiniciar o processo Wrangler, reconectou com as credenciais persistidas e repetiu o resultado. ENABLE_PAIRING=false confirmado por HTTP 403. Serviço restrito a 127.0.0.1:8799; nenhum deploy.
+
+O teste revelou incompatibilidades adicionais corrigidas: Workers exige redirect manual com validação de status 101; frames precisam de binaryType=arraybuffer; a versão de cliente herdada foi atualizada para a referência atual do Baileys; o timer de abertura agora é cancelado após upgrade para não abortar a sessão já aberta. Solicitação de código agora aguarda confirmação do servidor e a notificação de conclusão recebe ACK. Diagnóstico temporário foi removido. 19 testes e build passaram.
+
+Ainda não validado: resposta negativa com número comprovadamente sem WhatsApp, revogação no celular, operação prolongada e tráfego/logs na infraestrutura de destino. A geração de código e o pareamento são processos distintos: o código aceito isoladamente não comprovava a vinculação nas tentativas anteriores.

@@ -75,3 +75,45 @@ test('compressed bomb and oversized Noise frame fail closed', async () => {
   const handler = makeNoiseHandler({ keyPair: Curve.generateKeyPair(), NOISE_HEADER: Buffer.from([87,65,6,2]), logger: silent })
   await assert.rejects(() => handler.decodeFrame(Buffer.from([255,255,255]), () => assert.fail('must not deliver')))
 })
+
+test('Worker websocket uses manual redirects, validates upgrade, and receives binary frames', async () => {
+  const { WebSocketClient } = await import('../src/Socket/Client/websocket')
+  const original = globalThis.fetch
+  const events = new Map<string, Function>()
+  const peer = { binaryType: 'blob', readyState: 1, accept() {}, close() {}, addEventListener(event: string, callback: Function) { events.set(event, callback) } }
+  globalThis.fetch = (async (_url: unknown, init: RequestInit) => {
+    assert.equal(init.redirect, 'manual')
+    return { status: 101, webSocket: peer }
+  }) as any
+  try {
+    const socket = new WebSocketClient(new URL('wss://web.whatsapp.com/ws/chat'), { connectTimeoutMs: 1000 } as any)
+    let received: Buffer | undefined
+    socket.on('message', value => { received = value })
+    await socket.connect()
+    assert.equal(peer.binaryType, 'arraybuffer')
+    events.get('message')!({ data: new Uint8Array([1, 2]).buffer })
+    assert.deepEqual(received, Buffer.from([1, 2]))
+    globalThis.fetch = (async () => ({ status: 302 })) as any
+    const redirected = new WebSocketClient(new URL('wss://web.whatsapp.com/ws/chat'), { connectTimeoutMs: 1000 } as any)
+    let rejected = false
+    redirected.on('error', () => { rejected = true })
+    await redirected.connect()
+    assert.equal(rejected, true)
+  } finally { globalThis.fetch = original }
+})
+
+test('connection deadline is cancelled after upgrade and does not abort the live websocket', async () => {
+  const { WebSocketClient } = await import('../src/Socket/Client/websocket')
+  const original = globalThis.fetch
+  let signal: AbortSignal | undefined
+  globalThis.fetch = (async (_url: unknown, init: RequestInit) => {
+    signal = init.signal!
+    return { status: 101, webSocket: { binaryType: 'blob', accept() {}, addEventListener() {} } }
+  }) as any
+  try {
+    const socket = new WebSocketClient(new URL('wss://web.whatsapp.com/ws/chat'), { connectTimeoutMs: 5 } as any)
+    await socket.connect()
+    await new Promise(resolve => setTimeout(resolve, 30))
+    assert.equal(signal?.aborted, false)
+  } finally { globalThis.fetch = original }
+})

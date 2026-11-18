@@ -16,15 +16,21 @@ export class WebSocketClient extends AbstractSocketClient {
           this.url.port || this.url.pathname !== '/ws/chat' || this.url.username || this.url.password) {
         throw new Error('Destination not allowed')
       }
-      const response = await fetch(this.url.href.replace('wss://', 'https://'), {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), this.config.connectTimeoutMs)
+      let response: Response & { webSocket?: WebSocket & { accept(): void } }
+      try {
+      response = await fetch(this.url.href.replace('wss://', 'https://'), {
         headers: { origin: DEFAULT_ORIGIN, Upgrade: 'websocket' },
-        redirect: 'error',
-        signal: AbortSignal.timeout(this.config.connectTimeoutMs)
+        redirect: 'manual',
+        signal: controller.signal
       }) as Response & { webSocket?: WebSocket & { accept(): void } }
+      } finally { clearTimeout(timer) }
       const socket = response.webSocket
-      if (!socket) throw new Error('WebSocket upgrade failed')
+      if (response.status !== 101 || !socket) throw new Error('WebSocket upgrade failed')
       if (this.stopped) { socket.accept(); socket.close(); return }
       this.socket = socket
+      socket.binaryType = 'arraybuffer'
       socket.addEventListener('message', event => {
         this.emit('message', event.data instanceof ArrayBuffer ? Buffer.from(event.data) : event.data)
       })
