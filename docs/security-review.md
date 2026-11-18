@@ -52,3 +52,10 @@ Ainda não validado: resposta negativa com número comprovadamente sem WhatsApp,
 27 testes passaram após adicionar cobertura de quedas transitórias, limite de tentativas, cooldown, revogação persistida entre instâncias, falha de armazenamento, concorrência e resposta negativa após recuperação. Até 3 conexões por chamada, com pausas de 250 ms e 1 s; falha definitiva resulta em 503 e pausa de 30 s. Não repete a consulta ao provedor automaticamente, apenas o estabelecimento da conexão. Erros de certificado não são retentados. Não há timers de reconexão em segundo plano.
 
 Consulta positiva real repetida com esta versão antes e depois de reiniciar o processo; pareamento continua bloqueado por HTTP 403. A revogação e a queda de transporte foram simuladas nos testes, sem revogar a conta real nem alterar a rede do computador. Pendente número comprovadamente sem WhatsApp para teste negativo real e ensaio prolongado; não confundir testes simulados com homologação desses cenários.
+
+
+## Consulta negativa real
+
+Número fornecido pelo usuário retornou contact type=invalid do WhatsApp. A validação restritiva anterior rejeitava esse retorno e produzia 503. Agora in produz true; out e invalid produzem false; tipos desconhecidos e erros continuam falhando com 503. Regressão percorre parser USync e HTTP. 28 testes e build passaram.
+
+Verificação real após correção: número informado retornou HTTP 200 false, e conta dedicada de controle retornou HTTP 200 true na mesma execução. O caso invalid não distingue número inválido de número válido sem conta; um retorno real out ainda não foi observado. Sem envio de mensagens ou registro dos números neste relatório. Referência do parser upstream: https://github.com/WhiskeySockets/Baileys/blob/master/src/WAUSync/Protocols/USyncContactProtocol.ts (o upstream considera verdadeiro apenas in).

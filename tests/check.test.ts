@@ -95,3 +95,18 @@ test('WebSocket refuses destinations outside WhatsApp without network access', a
     assert.equal(calls, 0)
   } finally { globalThis.fetch = originalFetch }
 })
+
+test('negative WhatsApp contact types pass through USync parsing and HTTP as false', async () => {
+  const { USyncQuery } = await import('../src/WAUSync')
+  for (const type of ['out', 'invalid']) {
+    const query = new USyncQuery().withContactProtocol()
+    const result = query.parseUSyncQueryResult({ tag: 'iq', attrs: { type: 'result' }, content: [
+      { tag: 'usync', attrs: {}, content: [{ tag: 'list', attrs: {}, content: [
+        { tag: 'user', attrs: {}, content: [{ tag: 'contact', attrs: { type } }] }
+      ] }] }
+    ] })
+    const response = await route(request(), secret, async () => contactResult(result))
+    assert.equal(response.status, 200)
+    assert.equal(await response.text(), 'false')
+  }
+})
