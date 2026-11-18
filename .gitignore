@@ -19,3 +19,6 @@ test.ts
 TestData
 wa-logs.txt
 .wrangler/
+.dev.vars*
+!.dev.vars.example
+dist/

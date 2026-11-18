@@ -24,7 +24,10 @@ export class USyncContactProtocol implements USyncQueryProtocol {
 	parser(node: BinaryNode): boolean {
 		if(node.tag === 'contact') {
 			assertNodeErrorFree(node)
-			return node?.attrs?.type === 'in'
+			if (!['in', 'out'].includes(node.attrs.type)) {
+                throw new Error('Unexpected contact response')
+            }
+            return node.attrs.type === 'in'
 		}
 
 		return false

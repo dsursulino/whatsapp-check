@@ -1,84 +1,74 @@
-# WhatsApp Cloudflare Workers
+# whatsapp-check
 
-This project is a modified version of **Baileys WhatsApp**, specifically optimized to run on **Cloudflare Workers**. It allows you to register multiple WhatsApp numbers and send messages to any number efficiently.
+Serviço de uma única finalidade: consultar se um número tem WhatsApp.
+Fork de [art-hack/whatsapp-cloudflare-workers](https://github.com/art-hack/whatsapp-cloudflare-workers), baseado em Baileys.
 
-## How does it work?
+```http
+GET /check?phone=5511999999999
+Authorization: Bearer <API_KEY>
+```
 
-- The system operates **directly on the edge**, using Cloudflare Workers to establish connections with WhatsApp.
-- A direct connection is made with the **WhatsApp server WebSocket** and maintained for a short period (between **10 and 50 seconds**).
-- This duration is sufficient to **register an account** and obtain the key or to **send messages**.
-- After this period, the connection is closed, ensuring **efficient resource consumption** and **significant processing savings**.
+Resposta HTTP 200: `true` ou `false`, sem objeto envoltório. Número com DDI, apenas dígitos.
+`400`: formato inválido. `401`: chave inválida. `429`: consulta em andamento.
+`503`: sessão ausente, conexão indisponível ou resposta inconclusiva. Erros nunca viram `false`.
 
-## Scalability
+## Rodar
 
-- **Scalability tests have not yet been conducted**.
-- It is suspected that message sending will be managed through a **queue system**, rather than horizontal scalability.
+Node.js 22+ e npm. Cloudflare Worker + um Durable Object SQLite para manter uma conta e suas chaves.
+Sem banco externo, R2, interface, envio de mensagens, filas ou consulta em lote.
 
-This approach aims to keep the system lightweight and efficient without requiring persistent connections.
-
-### Page to register multiple WhatsApp accounts
-![image](https://github.com/user-attachments/assets/60cc8478-1c25-4ec0-b89a-7eaea2d16442)
-
-### Generate QR Code
-![image](https://github.com/user-attachments/assets/a7c387b6-83e9-4bcd-bcaf-496102da9622)
-
-### Page to send message
-![image](https://github.com/user-attachments/assets/0200d4c4-b45c-4708-8ed0-9f1a80d5393d)
-
-## How to Set Up and Run the Project
-
-### 1. Clone the Repository
 ```sh
-git clone https://github.com/rafaelsg-01/whatsapp-cloudflare-workers.git
-cd whatsapp-cloudflare-workers
+npm ci --ignore-scripts
+cp .dev.vars.example .dev.vars
+# Preencha API_KEY e ADMIN_KEY com valores diferentes: openssl rand -hex 32
+npm run dev
 ```
 
-### 2. Install Dependencies
+As duas chaves precisam ter pelo menos 32 caracteres. `.dev.vars` e `.wrangler` não são versionados.
+Uma conexão de saída permanece ativa no Durable Object; ela não usa hibernação de WebSocket e pode gerar cobrança por duração.
+
+## Vincular a conta uma vez
+
+Uma conta autenticada é necessária. A consulta não envia mensagens ao número consultado.
+
 ```sh
-npm install
+curl -X POST 'http://localhost:8787/pair?phone=SEU_NUMERO_COM_DDI' \
+  -H "Authorization: Bearer $ADMIN_KEY"
 ```
 
-### 3. Run the Local Server
+Digite o `code` retornado em WhatsApp → Aparelhos conectados → Conectar com número de telefone.
+Não é necessário QR code. A conta fica vinculada até revogação/expiração; pode exigir nova vinculação.
+Após confirmar, consulte `GET /session` com `ADMIN_KEY` até retornar `{"connected":true}`.
+Então chame `/check` com `API_KEY`. As rotas administrativas não usam a chave dos consumidores.
+Não exponha a chave administrativa aos projetos clientes.
+
+## Validar e publicar
+
 ```sh
-wrangler dev
-```
-The server will be available at: [http://127.0.0.1:8787](http://127.0.0.1:8787)
-
----
-
-## UserBot Registration
-Choose a name for your **UserBot**, using only characters from `a-z`, `A-Z` and `0-9`.
-
-The default admin password is **`123456`**, and it can be changed in the file:
-```ts
-/Example/example.ts
-```
-In the variable:
-```ts
-const PASSWORD_ADMIN = "123456";
+npm test
+npm run build
+npx wrangler secret put API_KEY
+npx wrangler secret put ADMIN_KEY
+# Configure uma rota privada/Access no wrangler.toml antes da publicação.
+npm run deploy
 ```
 
-### 1. Connect to WhatsApp
-1. Access the main page.
-2. Fill in the `UserBot` and `Admin Password` fields.
-3. Click the blue **"Generate QR Code"** button.
-4. Scan the QR Code with WhatsApp on your phone **as quickly as possible** to avoid errors.
-5. Wait **30 seconds** for the UserBot to appear in the list.
+`workers_dev = false`: sem endereço público automático. Nenhum deploy faz parte da preparação local.
+Build e testes locais não comprovam consulta real: validar com conta vinculada, um número conhecido com WhatsApp e outro sem WhatsApp, e repetir após reiniciar o serviço.
 
-### 2. Test Message Sending
-1. Go to the **Send Message** page by clicking the green **"Go to Send Message"** button.
-2. Fill in the following fields:
-   - **UserBot** (the one you just created)
-   - **Phone number (destination)**
-   - **Message**
-   - **Admin Password**
-3. Click **"Send Message"** and if everything is correct, the message will be sent!
+## Correções neste fork
 
----
+- Removidos os exemplos com senha fixa, listagem pública e interfaces de envio.
+- Credenciais e chaves Signal persistidas no Durable Object; falhas de armazenamento não geram identidade nova.
+- Corrigida a aceitação de assinaturas inválidas e removidos logs de credenciais/sessões.
+- Conexão externa restrita a `web.whatsapp.com/ws/chat`, sem seguir redirecionamentos.
+- Socket por instância e operações de criptografia ordenadas; removido encerramento global em 50 segundos.
+- Protobuf vendorizado substituído por dependência atualizada e auditável pelo npm.
+- Somente resposta explícita do protocolo produz booleano; retorno desconhecido gera erro.
 
-This project is also available via npm:
-```sh
-npm i whatsapp-cloudflare-workers
-```
+Logs de aplicação não guardam telefone nem credenciais. Como o telefone está na URL do GET, configure também o proxy/Access para não registrar a query string.
+O código de protocolo herdado não passou por auditoria criptográfica completa. O serviço ainda precisa da validação real descrita acima antes de produção.
 
-If you have any questions or need help, feel free to open an issue or contribute with improvements!
+A licença MIT original foi preservada. O libsignal vendorizado possui licença própria GPL-3.0; consulte seu diretório antes de redistribuir.
+
+A verificação completa de tipos do legado apresenta erros herdados e não foi concluída; os testes executáveis e o build do Worker são os checks desta versão experimental.

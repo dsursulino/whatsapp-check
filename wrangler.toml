@@ -1,11 +1,16 @@
+name = "whatsapp-check"
+main = "service/worker.ts"
+compatibility_date = "2026-11-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
 
-name = "whatsapp-cloudflare-workers-api-work"
-main = "./Example/example.ts"
-compatibility_date = "2025-02-24"
-compatibility_flags = [ "nodejs_compat_v2" ]
-logpush = true
+[observability]
+enabled = false
 
+[[durable_objects.bindings]]
+name = "SESSION"
+class_name = "WhatsAppSession"
 
-[[r2_buckets]]
-binding = 'R2_whatsappCloudflareWorkers'
-bucket_name = 'whatsapp-cloudflare-workers-production'
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["WhatsAppSession"]

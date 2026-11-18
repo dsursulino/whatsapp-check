@@ -1,0 +1,3 @@
+# Gere duas chaves distintas com: openssl rand -hex 32
+API_KEY=
+ADMIN_KEY=

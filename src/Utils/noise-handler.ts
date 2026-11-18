@@ -91,7 +91,6 @@ export const makeNoiseHandler = ({
 	let writeCounter = 0
 	let isFinished = false
 	let sentIntro = false
-	let writeCounterIsZero = true //CF
 
 	let inBytes = Buffer.alloc(0)
 
@@ -127,29 +126,11 @@ export const makeNoiseHandler = ({
 			return keyEnc
 		},
 		encodeFrame: async(data: Buffer | Uint8Array) => { //CF
-			if (logForDevelopment.show) console.log('WARNING [encodeFrame()]', '[data]', data) //CF
 			/*CF if(isFinished) {
 				data = encrypt(data)
 			} */
 
-			//CF \/
-			/*
-				The "iv" parameter in the "aesEncryptGCM" function was constantly repeating, causing an execution error.
-				Adding "writeCounter += 1" before calling "aesEncryptGCM" fixed this issue.
-			*/
-			if(isFinished) {
-				const encryptForEncodeFrame = async (plaintext: Uint8Array) => {
-					if ( writeCounterIsZero ) { writeCounterIsZero = false } else { writeCounter += 1 }
-
-					const result = await aesEncryptGCM(plaintext, encKey, generateIV(writeCounter), hash)
-
-					authenticate(result)
-					return result
-				}
-
-				data = await encryptForEncodeFrame(data)
-			}
-			//CF /\
+			if(isFinished) data = await encrypt(data)
 
 			let header: Buffer
 
@@ -198,42 +179,9 @@ export const makeNoiseHandler = ({
 				let frame: Uint8Array | BinaryNode = inBytes.slice(3, size + 3)
 				inBytes = inBytes.slice(size + 3)
 
-				//CF \/
-				if(isFinished) {
-					/*CF const result = decrypt(frame)
-					frame = await decodeBinaryNode(result) */
+				if(isFinished) frame = await decodeBinaryNode(await decrypt(frame as Uint8Array))
+				onFrame(frame)
 
-					const iv = generateIV(isFinished ? readCounter : writeCounter)
-
-					const decryptForDecodeFrame = async (momentCiphertext: Uint8Array, momentDecKey: Buffer, momentIv: Uint8Array, momentHash: Buffer, momentOnFrame: (buff: Uint8Array | BinaryNode) => void) => {
-						const result = await aesDecryptGCM(momentCiphertext, momentDecKey, momentIv, momentHash)
-
-						var momentFrame = await decodeBinaryNode(result)
-						
-						logger.trace({ msg: (momentFrame as any)?.attrs?.id }, 'recv frame')
-						momentOnFrame(momentFrame)
-					}
-					decryptForDecodeFrame(frame, decKey, iv, hash, onFrame)
-
-					if (isFinished) {
-						readCounter += 1
-					}
-					else {
-						writeCounter += 1
-					}
-
-					authenticate(frame)
-				}
-
-				else {
-					logger.trace({ msg: (frame as any)?.attrs?.id }, 'recv frame')
-					onFrame(frame)
-				}
-				//CF /\
-
-				/*CF logger.trace({ msg: (frame as BinaryNode)?.attrs?.id }, 'recv frame')
-
-				onFrame(frame) */
 				size = getBytesSize()
 			}
 		}
