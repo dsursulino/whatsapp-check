@@ -66,17 +66,17 @@ function memoryStorage() {
 }
 test('auth and Signal keys survive reload, including binary values and deletions', async () => {
   const storage = memoryStorage()
-  const first = await authState(storage as any)
+  const first = await authState(storage as any, 'ab'.repeat(32))
   await first.saveCreds()
   await first.state.keys.set({ session: { contact: Buffer.from([1, 2, 3]) } })
-  const second = await authState(storage as any)
+  const second = await authState(storage as any, 'ab'.repeat(32))
   assert.deepEqual(second.state.creds.noiseKey, first.state.creds.noiseKey)
   assert.deepEqual((await second.state.keys.get('session', ['contact'])).contact, Buffer.from([1, 2, 3]))
   await second.state.keys.set({ session: { contact: null } })
   assert.equal((await second.state.keys.get('session', ['contact'])).contact, null)
 })
 test('storage failure does not create a replacement identity', async () => {
-  await assert.rejects(() => authState({ get: async () => { throw new Error('offline') } } as any))
+  await assert.rejects(() => authState({ get: async () => { throw new Error('offline') } } as any, 'ab'.repeat(32)))
 })
 
 test('WebSocket refuses destinations outside WhatsApp without network access', async () => {

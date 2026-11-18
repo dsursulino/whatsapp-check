@@ -40,7 +40,15 @@ export abstract class AbstractSocketClient /*CF extends EventEmitter */ {
             return false
         }
 
-        listeners.forEach(listener => listener(...args))
+        listeners.forEach(listener => {
+            try {
+                Promise.resolve(listener(...args)).catch(() => {
+                    if (event !== 'error') this.emit('error', new Error('Protocol handler failed'))
+                })
+            } catch {
+                if (event !== 'error') this.emit('error', new Error('Protocol handler failed'))
+            }
+        })
         return true
     }
 

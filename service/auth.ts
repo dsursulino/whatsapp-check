@@ -1,21 +1,23 @@
 import { initAuthCreds } from '../src/Utils/auth-utils'
-import { BufferJSON } from '../src/Utils/generics'
+import { encryptedStorage } from './storage'
 import { proto } from '../WAProto'
 import type { AuthenticationState, AuthenticationCreds, SignalDataTypeMap } from '../src/Types'
 
-export async function authState(storage: DurableObjectStorage) {
-  const stored = await storage.get<string>('creds')
-  const creds: AuthenticationCreds = stored === undefined ? initAuthCreds() : JSON.parse(stored, BufferJSON.reviver)
-  const saveCreds = () => storage.put('creds', JSON.stringify(creds, BufferJSON.replacer))
+export async function authState(storage: DurableObjectStorage, secret: string) {
+  const encrypted = await encryptedStorage(storage, secret)
+  const stored = await encrypted.read('creds')
+  const creds: AuthenticationCreds = stored === undefined ? initAuthCreds() : stored
+  for (const pair of [creds.noiseKey, creds.signedIdentityKey, creds.pairingEphemeralKeyPair, creds.signedPreKey?.keyPair]) {
+    if (pair?.private?.length !== 32 || pair?.public?.length !== 32) throw new Error('Invalid stored credentials')
+  }
+  const saveCreds = () => encrypted.write('creds', creds)
   const state: AuthenticationState = {
     creds,
     keys: {
       async get(type, ids) {
         const data: Record<string, SignalDataTypeMap[typeof type]> = {}
-        const stored = await storage.get<string>(ids.map(id => `${type}:${id}`))
         for (const id of ids) {
-          const serialized = stored.get(`${type}:${id}`)
-          let value = serialized === undefined ? null : JSON.parse(serialized, BufferJSON.reviver)
+          let value = await encrypted.read(`${type}:${id}`) ?? null
           if (value && type === 'app-state-sync-key') value = proto.Message.AppStateSyncKeyData.fromObject(value)
           data[id] = value
         }
@@ -27,7 +29,7 @@ export async function authState(storage: DurableObjectStorage) {
             for (const [id, value] of Object.entries(entries)) {
               const key = `${type}:${id}`
               if (value == null) await txn.delete(key)
-              else await txn.put(key, JSON.stringify(value, BufferJSON.replacer))
+              else await txn.put(key, await encrypted.encode(key, value))
             }
           }
         })

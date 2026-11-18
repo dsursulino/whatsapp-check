@@ -1,3 +1,7 @@
 # Gere duas chaves distintas com: openssl rand -hex 32
 API_KEY=
 ADMIN_KEY=
+# Chave de criptografia da sessão (64 caracteres hexadecimais): openssl rand -hex 32
+SESSION_KEY=
+# Habilitar somente durante a vinculação controlada
+ENABLE_PAIRING=false

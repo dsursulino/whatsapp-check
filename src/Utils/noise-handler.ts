@@ -1,11 +1,12 @@
-import { Boom } from '@hapi/boom'
 import { proto } from '../../WAProto'
-import { NOISE_MODE, WA_CERT_DETAILS } from '../Defaults'
+import { NOISE_MODE } from '../Defaults'
 import { KeyPair } from '../Types'
 import { BinaryNode, decodeBinaryNode } from '../WABinary'
 import { aesDecryptGCM, aesEncryptGCM, Curve, hkdf, sha256 } from './crypto'
 import { ILogger } from './logger'
-import { logForDevelopment } from '..'
+import { verifyServerCertificate } from './noise-certificate'
+
+export const MAX_NOISE_FRAME = 1024 * 1024
 
 const generateIV = (counter: number) => {
 	const iv = new ArrayBuffer(12)
@@ -34,9 +35,9 @@ export const makeNoiseHandler = ({
 	}
 
 	const encrypt = async (plaintext: Uint8Array) => { //CF
-		const result = await aesEncryptGCM(plaintext, encKey, generateIV(writeCounter), hash) //CF
-
-		writeCounter += 1
+		if (writeCounter >= 0x100000000) throw new Error('Noise counter exhausted')
+        const counter = writeCounter++
+        const result = await aesEncryptGCM(plaintext, encKey, generateIV(counter), hash)
 
 		authenticate(result)
 		return result
@@ -45,14 +46,10 @@ export const makeNoiseHandler = ({
 	const decrypt = async (ciphertext: Uint8Array) => { //CF
 		// before the handshake is finished, we use the same counter
 		// after handshake, the counters are different
-		const iv = generateIV(isFinished ? readCounter : writeCounter)
+		const counter = isFinished ? readCounter++ : writeCounter++
+        if (counter >= 0x100000000) throw new Error('Noise counter exhausted')
+        const iv = generateIV(counter)
 		const result = await aesDecryptGCM(ciphertext, decKey, iv, hash) //CF
-
-		if(isFinished) {
-			readCounter += 1
-		} else {
-			writeCounter += 1
-		}
 
 		authenticate(ciphertext)
 		return result
@@ -80,6 +77,7 @@ export const makeNoiseHandler = ({
 		readCounter = 0
 		writeCounter = 0
 		isFinished = true
+        if (pendingFrames) await processFrames(pendingFrames)
 	}
 
 	const data = Buffer.from(NOISE_MODE)
@@ -93,9 +91,24 @@ export const makeNoiseHandler = ({
 	let sentIntro = false
 
 	let inBytes = Buffer.alloc(0)
+    let receivedHello = false
+    let pendingFrames: ((buff: Uint8Array | BinaryNode) => void) | undefined
 
 	authenticate(NOISE_HEADER)
 	authenticate(publicKey)
+
+    const processFrames = async(onFrame: (buff: Uint8Array | BinaryNode) => void) => {
+        while (inBytes.length >= 3) {
+            const size = inBytes.readUIntBE(0, 3)
+            if (!size || size > MAX_NOISE_FRAME) throw new Error('Invalid Noise frame length')
+            if (!isFinished && receivedHello) return
+            if (inBytes.length < size + 3) return
+            const bytes = inBytes.subarray(3, size + 3)
+            inBytes = inBytes.subarray(size + 3)
+            if (isFinished) onFrame(await decodeBinaryNode(await decrypt(bytes)))
+            else { receivedHello = true; onFrame(bytes) }
+        }
+    }
 
 	return {
 		encrypt,
@@ -104,28 +117,27 @@ export const makeNoiseHandler = ({
 		mixIntoKey,
 		finishInit,
 		processHandshake: async({ serverHello }: proto.HandshakeMessage, noiseKey: KeyPair) => {
-			authenticate(serverHello!.ephemeral!)
+			if (serverHello?.ephemeral?.length !== 32 || !serverHello.static?.length || !serverHello.payload?.length) {
+                throw new Error('Invalid Noise handshake')
+            }
+			authenticate(serverHello.ephemeral)
 			await mixIntoKey(Curve.sharedKey(privateKey, serverHello!.ephemeral!))
 
-			const decStaticContent = await decrypt(serverHello!.static!) //CF
+			const decStaticContent = await decrypt(serverHello!.static!)
+            if (decStaticContent.length !== 32) throw new Error('Invalid Noise key')
 			await mixIntoKey(Curve.sharedKey(privateKey, decStaticContent))
 
 			const certDecoded = await decrypt(serverHello!.payload!) //CF
 
-			const { intermediate: certIntermediate } = proto.CertChain.decode(certDecoded)
-
-			const { issuerSerial } = proto.CertChain.NoiseCertificate.Details.decode(certIntermediate!.details!)
-
-			if(issuerSerial !== WA_CERT_DETAILS.SERIAL) {
-				throw new Boom('certification match failed', { statusCode: 400 })
-			}
+			verifyServerCertificate(certDecoded, decStaticContent)
 
 			const keyEnc = await encrypt(noiseKey.public) //CF
 			await mixIntoKey(Curve.sharedKey(noiseKey.private, serverHello!.ephemeral!))
 
 			return keyEnc
 		},
-		encodeFrame: async(data: Buffer | Uint8Array) => { //CF
+		encodeFrame: async(data: Buffer | Uint8Array) => {
+            if (data.byteLength > MAX_NOISE_FRAME - 16) throw new Error('Noise frame too large')
 			/*CF if(isFinished) {
 				data = encrypt(data)
 			} */
@@ -160,30 +172,11 @@ export const makeNoiseHandler = ({
 
 			return frame
 		},
-		decodeFrame: async(newData: Buffer | Uint8Array, onFrame: (buff: Uint8Array | BinaryNode) => void) => {
-			// the binary protocol uses its own framing mechanism
-			// on top of the WS frames
-			// so we get this data and separate out the frames
-			const getBytesSize = () => {
-				if(inBytes.length >= 3) {
-					return (inBytes.readUInt8() << 16) | inBytes.readUInt16BE(1)
-				}
-			}
-
-			inBytes = Buffer.concat([ inBytes, newData ])
-
-			logger.trace(`recv ${newData.length} bytes, total recv ${inBytes.length} bytes`)
-
-			let size = getBytesSize()
-			while(size && inBytes.length >= size + 3) {
-				let frame: Uint8Array | BinaryNode = inBytes.slice(3, size + 3)
-				inBytes = inBytes.slice(size + 3)
-
-				if(isFinished) frame = await decodeBinaryNode(await decrypt(frame as Uint8Array))
-				onFrame(frame)
-
-				size = getBytesSize()
-			}
-		}
-	}
+        decodeFrame: async(newData: Buffer | Uint8Array, onFrame: (buff: Uint8Array | BinaryNode) => void) => {
+            if (inBytes.length + newData.byteLength > MAX_NOISE_FRAME + 3) throw new Error('Noise buffer too large')
+            pendingFrames = onFrame
+            inBytes = Buffer.concat([inBytes, newData])
+            await processFrames(onFrame)
+        }
+    }
 }

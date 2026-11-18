@@ -1,3 +1,4 @@
+import { finishCodePairing } from '../Utils/code-pairing'
 import { Boom } from '@hapi/boom'
 import { randomBytes } from 'crypto'
 //CF import { URL } from 'url'
@@ -255,7 +256,7 @@ export const makeSocket = (config: SocketConfig) => {
 		const keyEnc = await noise.processHandshake(handshake, creds.noiseKey)
 
 		let node: proto.IClientPayload
-		if(!creds.me) {
+		if(!creds.account) {
 			node = generateRegistrationNode(creds, config)
 
 			logger.info({ node }, 'not logged in, attempting registration...')
@@ -282,7 +283,7 @@ export const makeSocket = (config: SocketConfig) => {
 		await sendRawMessage(
 			parameterSendRawMessageFinish //CF
 		)
-		noise.finishInit()
+		await noise.finishInit()
 		startKeepAliveRequest()
 	}
 
@@ -327,8 +328,13 @@ export const makeSocket = (config: SocketConfig) => {
 	}
 
 	let receiveQueue: Promise<void> = Promise.resolve()
+    let pendingBytes = 0
     const onMessageReceived = (data: Buffer) => {
-        receiveQueue = receiveQueue.then(() => decodeMessage(data)).catch(error => end(error))
+        if (!Buffer.isBuffer(data)) { end(new Error('Invalid frame type')); return }
+        if (data.length > 1024 * 1024 || pendingBytes + data.length > 2 * 1024 * 1024) { end(new Error('Receive queue limit')); return }
+        pendingBytes += data.length
+        receiveQueue = receiveQueue.then(() => closed ? undefined : decodeMessage(data))
+            .catch(error => end(error)).finally(() => { pendingBytes -= data.length })
     }
     const decodeMessage = (data: Buffer) => {
 		return noise.decodeFrame(data, frame => {
@@ -589,6 +595,10 @@ export const makeSocket = (config: SocketConfig) => {
 			]
 		})
 	}
+
+	ws.on('CB:notification,type:link_code_companion_reg', async(node: BinaryNode) => {
+        await finishCodePairing(node, authState, query, generateMessageTag, ev)
+    })
 
 	ws.on('message', onMessageReceived)
 

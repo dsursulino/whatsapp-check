@@ -2,7 +2,6 @@ import { /*CF createCipheriv, createDecipheriv,  */createHash, createHmac, rando
 import * as libsignal from '../../node_modules_custom/libsignal_custom'
 import { KEY_BUNDLE_TYPE } from '../Defaults'
 import { KeyPair } from '../Types'
-import { logForDevelopment } from '..'
 
 // insure browser & node compatibility
 const { subtle } = globalThis.crypto
@@ -32,7 +31,7 @@ export const Curve = {
 	),
 	verify: (pubKey: Uint8Array, message: Uint8Array, signature: Uint8Array) => {
 		try {
-			libsignal.curve.verifySignature(generateSignalPubKey(pubKey), message, signature)
+			libsignal.curve.verifySignature(Buffer.from(generateSignalPubKey(pubKey)), message, signature)
 			return true
 		} catch(error) {
 			return false

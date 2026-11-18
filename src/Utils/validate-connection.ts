@@ -1,5 +1,5 @@
 import { Boom } from '@hapi/boom'
-import { createHash } from 'crypto'
+import { createHash, timingSafeEqual } from 'crypto'
 import { proto } from '../../WAProto'
 import { KEY_BUNDLE_TYPE } from '../Defaults'
 import type { AuthenticationCreds, SignalCreds, SocketConfig } from '../Types'
@@ -132,7 +132,7 @@ export const configureSuccessfulPairing = (
 	const { details, hmac } = proto.ADVSignedDeviceIdentityHMAC.decode(deviceIdentityNode.content as Buffer)
 	// check HMAC matches
 	const advSign = hmacSign(details!, Buffer.from(advSecretKey, 'base64'))
-	if(Buffer.compare(hmac!, advSign) !== 0) {
+	if(hmac?.length !== advSign.length || !timingSafeEqual(Buffer.from(hmac), advSign)) {
 		throw new Boom('Invalid account signature')
 	}
 

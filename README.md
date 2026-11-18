@@ -24,7 +24,9 @@ cp .dev.vars.example .dev.vars
 npm run dev
 ```
 
-As duas chaves precisam ter pelo menos 32 caracteres. `.dev.vars` e `.wrangler` não são versionados.
+Defina também `SESSION_KEY` com `openssl rand -hex 32`; ela criptografa o armazenamento. Guarde-a como segredo separado e preserve-a entre reinícios. A perda da chave exige nova vinculação. Para vincular, habilite temporariamente `ENABLE_PAIRING=true` e desabilite após concluir.
+
+As duas chaves de acesso precisam ter pelo menos 32 caracteres. `.dev.vars` e `.wrangler` não são versionados.
 Uma conexão de saída permanece ativa no Durable Object; ela não usa hibernação de WebSocket e pode gerar cobrança por duração.
 
 ## Vincular a conta uma vez
@@ -49,6 +51,7 @@ npm test
 npm run build
 npx wrangler secret put API_KEY
 npx wrangler secret put ADMIN_KEY
+npx wrangler secret put SESSION_KEY
 # Configure uma rota privada/Access no wrangler.toml antes da publicação.
 npm run deploy
 ```

@@ -1,41 +1,41 @@
 //CF import { promisify } from 'util'
 //CF import { inflate } from 'zlib'
-import { inflate } from 'pako' //CF
+import { Inflate } from 'pako'
 import * as constants from './constants'
 import { jidEncode } from './jid-utils'
 import type { BinaryNode, BinaryNodeCodingOptions } from './types'
 
 /*CF const inflatePromise = promisify(inflate) */
 
+export const MAX_DECOMPRESSED = 4 * 1024 * 1024
 export const decompressingIfRequired = async(buffer: Buffer) => {
-	/*CF if(2 & buffer.readUInt8()) {
-		buffer = await inflatePromise(buffer.slice(1))
-	} else { // nodes with no compression have a 0x00 prefix, we remove that
-		buffer = buffer.slice(1)
-	}
-
-	return buffer */
-
-	//CF \/
-	if (2 & buffer.readUInt8()) {
-		buffer = Buffer.from(inflate(buffer.slice(1)))
-	} else {
-		buffer = buffer.slice(1)
-	}
-
-	return buffer
-	//CF /\
+    if (!buffer.length || buffer.length > MAX_DECOMPRESSED || (buffer[0] & ~2)) throw new Error('Invalid binary frame')
+    if (!(buffer[0] & 2)) return buffer.subarray(1)
+    const chunks: Buffer[] = []
+    let length = 0
+    const inflater = new Inflate({ chunkSize: 16384 })
+    inflater.onData = chunk => {
+        length += chunk.length
+        if (length > MAX_DECOMPRESSED) throw new Error('Decompressed frame too large')
+        chunks.push(Buffer.from(chunk))
+    }
+    inflater.push(buffer.subarray(1), true)
+    if (inflater.err || !inflater.ended) throw new Error('Invalid compressed frame')
+    return Buffer.concat(chunks, length)
 }
 
 export const decodeDecompressedBinaryNode = (
 	buffer: Buffer,
 	opts: Pick<BinaryNodeCodingOptions, 'DOUBLE_BYTE_TOKENS' | 'SINGLE_BYTE_TOKENS' | 'TAGS'>,
-	indexRef: { index: number } = { index: 0 }
+	indexRef: { index: number; nodes?: number } = { index: 0 },
+    depth = 0
 ): BinaryNode => {
+    indexRef.nodes = (indexRef.nodes ?? 0) + 1
+    if (depth > 64 || indexRef.nodes > 10000) throw new Error('Binary node limit exceeded')
 	const { DOUBLE_BYTE_TOKENS, SINGLE_BYTE_TOKENS, TAGS } = opts
 
 	const checkEOS = (length: number) => {
-		if(indexRef.index + length > buffer.length) {
+		if(!Number.isSafeInteger(length) || length < 0 || indexRef.index + length > buffer.length) {
 			throw new Error('end of stream')
 		}
 	}
@@ -70,7 +70,7 @@ export const decodeDecompressedBinaryNode = (
 			val |= next() << (shift * 8)
 		}
 
-		return val
+		return val >>> 0
 	}
 
 	const readInt20 = () => {
@@ -206,7 +206,7 @@ export const decodeDecompressedBinaryNode = (
 		const items: BinaryNode[] = []
 		const size = readListSize(tag)
 		for(let i = 0;i < size;i++) {
-			items.push(decodeDecompressedBinaryNode(buffer, opts, indexRef))
+			items.push(decodeDecompressedBinaryNode(buffer, opts, indexRef, depth + 1))
 		}
 
 		return items
@@ -232,7 +232,7 @@ export const decodeDecompressedBinaryNode = (
 		throw new Error('invalid node')
 	}
 
-	const attrs: BinaryNode['attrs'] = { }
+	const attrs: BinaryNode['attrs'] = Object.create(null)
 	let data: BinaryNode['content']
 	if(listSize === 0 || !header) {
 		throw new Error('invalid node')
@@ -244,6 +244,7 @@ export const decodeDecompressedBinaryNode = (
 		const key = readString(readByte())
 		const value = readString(readByte())
 
+        if (Object.hasOwn(attrs, key) || ['__proto__', 'constructor', 'prototype'].includes(key)) throw new Error('Invalid node attribute')
 		attrs[key] = value
 	}
 
@@ -281,5 +282,8 @@ export const decodeDecompressedBinaryNode = (
 
 export const decodeBinaryNode = async(buff: Buffer): Promise<BinaryNode> => {
 	const decompBuff = await decompressingIfRequired(buff)
-	return decodeDecompressedBinaryNode(decompBuff, constants)
+	const position = { index: 0 }
+    const node = decodeDecompressedBinaryNode(decompBuff, constants, position)
+    if (position.index !== decompBuff.length) throw new Error('Trailing binary data')
+    return node
 }

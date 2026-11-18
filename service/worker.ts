@@ -4,12 +4,13 @@ import { USyncQuery, USyncUser } from '../src/WAUSync'
 import { authState } from './auth'
 import { authorized, contactResult, phoneFrom, reply, route } from './http'
 
-interface Env { API_KEY: string; ADMIN_KEY: string; SESSION: DurableObjectNamespace }
+interface Env { API_KEY: string; ADMIN_KEY: string; SESSION_KEY: string; ENABLE_PAIRING?: string; SESSION: DurableObjectNamespace }
 const silent = { level: 'silent', child() { return this }, trace() {}, debug() {}, info() {}, warn() {}, error() {} }
 
 export default {
   async fetch(request: Request, env: Env) {
     const path = new URL(request.url).pathname
+    if (env.API_KEY === env.ADMIN_KEY) return reply({ error: 'configuration_error' }, 503)
     if (path === '/pair' || path === '/session') {
       if (!await authorized(request, env.ADMIN_KEY)) return reply({ error: 'unauthorized' }, 401)
     } else {
@@ -41,8 +42,8 @@ export class WhatsAppSession {
 
   private async start(pair: boolean) {
     await this.writing
-    this.auth ??= await authState(this.ctx.storage)
-    if (!pair && !this.auth.state.creds.me) throw new Error('Pairing required')
+    this.auth ??= await authState(this.ctx.storage, this.env.SESSION_KEY)
+    if (!pair && !this.auth.state.creds.account) throw new Error('Pairing required')
     this.status = 'connecting'
     const socket = makeUSyncSocket({
       ...DEFAULT_CONNECTION_CONFIG,
@@ -100,10 +101,11 @@ export class WhatsAppSession {
     this.busy = true
     try {
       if (path === '/pair' && request.method === 'POST') {
+        if (this.env.ENABLE_PAIRING !== 'true') return reply({ error: 'pairing_disabled' }, 403)
         const phone = phoneFrom(request)
         if (!phone) return reply({ error: 'invalid_phone' }, 400)
         await this.connect(true)
-        if (this.auth!.state.creds.me) return reply({ error: 'already_paired' }, 409)
+        if (this.auth!.state.creds.account) return reply({ error: 'already_paired' }, 409)
         const code = await this.socket!.requestPairingCode(phone)
         await this.writing
         if (this.storageFailed) throw new Error('Storage unavailable')
@@ -114,6 +116,7 @@ export class WhatsAppSession {
         return reply({ connected: this.status === 'open' })
       }
       return await route(request, this.env.API_KEY, async phone => {
+        try {
         await this.connect()
         if (this.status !== 'open') throw new Error('Pairing required')
         const result = await this.socket!.executeUSyncQuery(new USyncQuery()
@@ -121,8 +124,13 @@ export class WhatsAppSession {
         await this.writing
         if (this.storageFailed) throw new Error('Storage unavailable')
         return contactResult(result)
+        } catch {
+          this.socket?.end(new Error('Query failed'))
+          throw new Error('WhatsApp unavailable')
+        }
       })
     } catch {
+      this.socket?.end(new Error('Session unavailable'))
       return reply({ error: 'whatsapp_unavailable' }, 503)
     } finally { this.busy = false }
   }
