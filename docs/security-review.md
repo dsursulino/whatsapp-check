@@ -45,3 +45,10 @@ Conta dedicada vinculada por código em 18/11/2026. Validação real da cadeia N
 O teste revelou incompatibilidades adicionais corrigidas: Workers exige redirect manual com validação de status 101; frames precisam de binaryType=arraybuffer; a versão de cliente herdada foi atualizada para a referência atual do Baileys; o timer de abertura agora é cancelado após upgrade para não abortar a sessão já aberta. Solicitação de código agora aguarda confirmação do servidor e a notificação de conclusão recebe ACK. Diagnóstico temporário foi removido. 19 testes e build passaram.
 
 Ainda não validado: resposta negativa com número comprovadamente sem WhatsApp, revogação no celular, operação prolongada e tráfego/logs na infraestrutura de destino. A geração de código e o pareamento são processos distintos: o código aceito isoladamente não comprovava a vinculação nas tentativas anteriores.
+
+
+## Testes e reconexão sob demanda
+
+27 testes passaram após adicionar cobertura de quedas transitórias, limite de tentativas, cooldown, revogação persistida entre instâncias, falha de armazenamento, concorrência e resposta negativa após recuperação. Até 3 conexões por chamada, com pausas de 250 ms e 1 s; falha definitiva resulta em 503 e pausa de 30 s. Não repete a consulta ao provedor automaticamente, apenas o estabelecimento da conexão. Erros de certificado não são retentados. Não há timers de reconexão em segundo plano.
+
+Consulta positiva real repetida com esta versão antes e depois de reiniciar o processo; pareamento continua bloqueado por HTTP 403. A revogação e a queda de transporte foram simuladas nos testes, sem revogar a conta real nem alterar a rede do computador. Pendente número comprovadamente sem WhatsApp para teste negativo real e ensaio prolongado; não confundir testes simulados com homologação desses cenários.

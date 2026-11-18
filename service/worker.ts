@@ -21,6 +21,12 @@ export default {
   }
 }
 
+const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+const disconnectCode = (error: unknown): number | undefined =>
+  (error as { output?: { statusCode?: number } })?.output?.statusCode
+const temporary = (error: unknown) => [408, 428, 503, 515].includes(disconnectCode(error) ?? 0)
+const dependencies = { makeSocket: makeUSyncSocket, loadAuth: authState, pause, now: Date.now }
+
 export class WhatsAppSession {
   private socket?: ReturnType<typeof makeUSyncSocket>
   private auth?: Awaited<ReturnType<typeof authState>>
@@ -29,23 +35,45 @@ export class WhatsAppSession {
   private writing: Promise<void> = Promise.resolve()
   private storageFailed = false
   private busy = false
+  private retryAfter = 0
+  private revoked = false
 
-  constructor(private ctx: DurableObjectState, private env: Env) {}
+  constructor(private ctx: DurableObjectState, private env: Env, private deps = dependencies) {}
 
   private async connect(pair = false) {
     if (this.storageFailed) throw new Error('Storage unavailable')
     if (this.status === 'open' || this.status === 'pairing') return
     if (this.starting) return this.starting
-    this.starting = this.start(pair).finally(() => { this.starting = undefined })
+    if (this.deps.now() < this.retryAfter) throw new Error('Reconnect cooldown')
+    this.starting = this.reconnect(pair).finally(() => { this.starting = undefined })
     return this.starting
+  }
+
+  private async reconnect(pair: boolean) {
+    // On-demand only: no perpetual background timers or retry storm when idle.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await this.start(pair)
+        this.retryAfter = 0
+        return
+      } catch (error) {
+        if (pair || this.revoked || this.storageFailed || !temporary(error) || attempt === 2) {
+          this.retryAfter = this.deps.now() + 30_000
+          throw error
+        }
+        await this.deps.pause(attempt === 0 ? 250 : 1000)
+      }
+    }
   }
 
   private async start(pair: boolean) {
     await this.writing
-    this.auth ??= await authState(this.ctx.storage, this.env.SESSION_KEY)
+    this.revoked = !!await this.ctx.storage.get('session-revoked')
+    if (this.revoked) throw new Error('Pairing required')
+    this.auth ??= await this.deps.loadAuth(this.ctx.storage, this.env.SESSION_KEY)
     if (!pair && !this.auth.state.creds.account) throw new Error('Pairing required')
     this.status = 'connecting'
-    const socket = makeUSyncSocket({
+    const socket = this.deps.makeSocket({
       ...DEFAULT_CONNECTION_CONFIG,
       auth: this.auth.state,
       logger: silent,
@@ -68,12 +96,18 @@ export class WhatsAppSession {
     })
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
-        socket.end(new Error('Connection timeout'))
-        reject(new Error('Connection timeout'))
+        const error = Object.assign(new Error('Connection timeout'), { output: { statusCode: 408 } })
+        socket.end(error)
+        reject(error)
       }, 15_000)
       socket.ev.on('connection.update', update => {
         if (socket !== this.socket) return
         if (update.qr) {
+          if (!pair) {
+            socket.end(new Error('Pairing required'))
+            reject(new Error('Pairing required'))
+            return
+          }
           this.status = 'pairing'
           clearTimeout(timer)
           resolve()
@@ -87,7 +121,13 @@ export class WhatsAppSession {
           this.status = 'closed'
           this.socket = undefined
           clearTimeout(timer)
-          reject(new Error('Connection closed'))
+          const error = update.lastDisconnect?.error ?? new Error('Connection closed')
+          if (disconnectCode(error) === 401) {
+            this.revoked = true
+            this.writing = this.writing.then(() => this.ctx.storage.put('session-revoked', true)).catch(() => { this.storageFailed = true })
+            this.ctx.waitUntil(this.writing)
+          }
+          reject(error)
         }
       })
     })
@@ -104,6 +144,13 @@ export class WhatsAppSession {
         if (this.env.ENABLE_PAIRING !== 'true') return reply({ error: 'pairing_disabled' }, 403)
         const phone = phoneFrom(request)
         if (!phone) return reply({ error: 'invalid_phone' }, 400)
+        await this.writing
+        if (this.revoked || await this.ctx.storage.get('session-revoked')) {
+          await this.ctx.storage.deleteAll()
+          this.auth = undefined
+          this.revoked = false
+        }
+        this.retryAfter = 0
         await this.connect(true)
         if (this.auth!.state.creds.account) return reply({ error: 'already_paired' }, 409)
         const code = await this.socket!.requestPairingCode(phone)

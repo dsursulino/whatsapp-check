@@ -75,3 +75,9 @@ O código de protocolo herdado não passou por auditoria criptográfica completa
 A licença MIT original foi preservada. O libsignal vendorizado possui licença própria GPL-3.0; consulte seu diretório antes de redistribuir.
 
 A verificação completa de tipos do legado apresenta erros herdados e não foi concluída; os testes executáveis e o build do Worker são os checks desta versão experimental.
+
+## Reconexão
+
+A primeira consulta após uma queda tenta restabelecer a conexão até 3 vezes (pausas de 250 ms e 1 s), apenas para falhas temporárias reconhecidas. Cada tentativa tem prazo de 15 s. Ao esgotar tentativas, retorna 503 e aplica pausa de 30 s; não há loop em segundo plano. A consulta que falhar durante o envio retorna 503; a próxima chamada pode reconectar, sem repetir consultas automaticamente.
+
+Revogação (401 do WhatsApp) é persistida e impede reconexão automática, inclusive após reinício. Para vincular novamente, habilite temporariamente ENABLE_PAIRING e use /pair com ADMIN_KEY: somente nesse fluxo explícito o estado revogado é descartado. Falhas de certificado e armazenamento não disparam novas tentativas. A sessão atual permanece com pareamento desabilitado.
